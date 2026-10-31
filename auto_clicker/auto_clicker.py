@@ -139,4 +139,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        err = traceback.format_exc()
+        print("\n[오류 발생]\n" + err)
+        (Path(__file__).parent / "error_log.txt").write_text(err, encoding="utf-8")
+        print("오류 내용이 error_log.txt 파일에 저장되었습니다.")
+        sys.exit(1)

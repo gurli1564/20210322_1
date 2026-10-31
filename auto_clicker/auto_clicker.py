@@ -36,14 +36,51 @@ def load_targets(folder: Path):
     return images
 
 
+SCALES = [1.0, 1.25, 1.5, 0.8, 1.75, 2.0, 0.67, 1.1, 0.9, 1.4, 1.6, 0.75]
+_best_scale = {}  # 이미지별로 한 번 맞은 배율을 기억해서 다음엔 그 배율부터 검사
+
+
 def find_on_screen(image: Path, confidence: float, grayscale: bool):
-    kwargs = {"grayscale": grayscale}
-    if HAS_CV2:
-        kwargs["confidence"] = confidence
-    try:
-        return pyautogui.locateCenterOnScreen(str(image), **kwargs)
-    except pyautogui.ImageNotFoundException:
+    """화면에서 이미지를 찾아 중심 좌표(x, y)를 반환. 없으면 None.
+
+    opencv가 있으면 여러 배율(디스플레이 확대 125%, 150% 등)로도 찾아봅니다.
+    """
+    if not HAS_CV2:
+        try:
+            pos = pyautogui.locateCenterOnScreen(str(image), grayscale=grayscale)
+            return (pos.x, pos.y) if pos else None
+        except pyautogui.ImageNotFoundException:
+            return None
+
+    import numpy as np
+    shot = pyautogui.screenshot()
+    screen = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+    templ = cv2.imread(str(image), cv2.IMREAD_COLOR)
+    if templ is None:
         return None
+    if grayscale:
+        screen = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+        templ = cv2.cvtColor(templ, cv2.COLOR_BGR2GRAY)
+
+    # 맥 레티나처럼 스크린샷 픽셀과 마우스 좌표 배율이 다른 경우 보정
+    ratio_x = pyautogui.size()[0] / shot.size[0]
+    ratio_y = pyautogui.size()[1] / shot.size[1]
+
+    cached = _best_scale.get(image)
+    scales = ([cached] if cached else []) + [s for s in SCALES if s != cached]
+    for scale in scales:
+        t = templ if scale == 1.0 else cv2.resize(templ, None, fx=scale, fy=scale,
+                                                  interpolation=cv2.INTER_LINEAR)
+        th, tw = t.shape[:2]
+        if th > screen.shape[0] or tw > screen.shape[1] or th < 8 or tw < 8:
+            continue
+        result = cv2.matchTemplate(screen, t, cv2.TM_CCOEFF_NORMED)
+        _, score, _, loc = cv2.minMaxLoc(result)
+        if score >= confidence:
+            _best_scale[image] = scale
+            cx, cy = loc[0] + tw / 2, loc[1] + th / 2
+            return int(cx * ratio_x), int(cy * ratio_y)
+    return None
 
 
 def main():
@@ -82,7 +119,7 @@ def main():
                 pos = find_on_screen(img, args.confidence, args.grayscale)
                 if pos is None:
                     continue
-                x, y = pos.x + args.offset[0], pos.y + args.offset[1]
+                x, y = pos[0] + args.offset[0], pos[1] + args.offset[1]
                 original = pyautogui.position()
                 pyautogui.click(x, y, clicks=args.clicks, interval=0.1, button=args.button)
                 if not args.no_return:
